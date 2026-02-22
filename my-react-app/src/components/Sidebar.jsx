@@ -2,7 +2,7 @@ import { NavLink, useNavigate } from 'react-router-dom';
 import { useTeam } from '../context/TeamContext';
 import TeamLogo from './TeamLogo';
 import {
-  Zap,
+  Medal,
   LayoutDashboard,
   Activity,
   TrendingUp,
@@ -73,8 +73,8 @@ export default function Sidebar({ collapsed, onToggle }) {
     >
       {/* Logo */}
       <div className="flex items-center gap-2.5 px-4 py-4 border-b border-zinc-100/60 flex-shrink-0">
-        <div className="w-8 h-8 rounded-xl bg-zinc-900 flex items-center justify-center flex-shrink-0">
-          <Zap size={15} className="text-white" />
+        <div className="w-8 h-8 flex items-center justify-center flex-shrink-0">
+          <Medal size={20} className="text-zinc-900" />
         </div>
         {!collapsed && (
           <span className="text-sm font-semibold text-zinc-900 tracking-tight whitespace-nowrap">

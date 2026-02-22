@@ -1,5 +1,5 @@
 import { useNavigate } from 'react-router-dom';
-import { Activity, TrendingUp, AlertTriangle, DollarSign, Users, BarChart3, ArrowRight, Zap } from 'lucide-react';
+import { Activity, TrendingUp, AlertTriangle, DollarSign, Users, BarChart3, ArrowRight, Medal } from 'lucide-react';
 
 const FEATURES = [
   {
@@ -99,7 +99,7 @@ export default function LandingPage() {
       <nav className="fixed top-0 left-0 right-0 z-50 glass border-b border-white/30">
         <div className="max-w-6xl mx-auto px-6 h-14 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <Zap size={18} className="text-zinc-900" />
+            <Medal size={18} className="text-zinc-900" />
             <span className="font-semibold text-zinc-900 text-sm tracking-tight">The War Room</span>
           </div>
           <div className="flex items-center gap-3">
@@ -164,7 +164,7 @@ export default function LandingPage() {
       <footer className="border-t border-zinc-200 py-8">
         <div className="max-w-6xl mx-auto px-6 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <Zap size={14} className="text-zinc-400" />
+            <Medal size={14} className="text-zinc-400" />
             <span className="text-xs text-zinc-400 font-medium">The War Room</span>
           </div>
           <p className="text-xs text-zinc-400">NBA Executive AI Suite · 2025</p>

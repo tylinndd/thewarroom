@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTeam } from '../context/TeamContext';
-import { Zap, Eye, EyeOff } from 'lucide-react';
+import { Medal, Eye, EyeOff } from 'lucide-react';
 
 export default function AuthPage() {
   const [mode, setMode] = useState('login'); // 'login' | 'signup'
@@ -41,8 +41,8 @@ export default function AuthPage() {
       <div className="w-full max-w-sm">
         {/* Logo */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-12 h-12 rounded-2xl bg-zinc-900 mb-4">
-            <Zap size={22} className="text-white" />
+          <div className="inline-flex items-center justify-center w-12 h-12 mb-4">
+            <Medal size={36} className="text-zinc-900" />
           </div>
           <h1 className="text-2xl font-bold text-zinc-900 tracking-tight">The War Room</h1>
           <p className="text-sm text-zinc-500 mt-1">NBA Executive AI Suite</p>
