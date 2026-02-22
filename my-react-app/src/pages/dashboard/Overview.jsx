@@ -1,6 +1,8 @@
+import { useState, useEffect } from 'react';
 import { useTeam } from '../../context/TeamContext';
+import { api } from '../../api/client';
 import { DUMMY_ROSTER, DUMMY_TEAM_STATS } from '../../data/dummyRoster';
-import { TrendingUp, DollarSign, AlertTriangle, Trophy, ArrowRight } from 'lucide-react';
+import { TrendingUp, DollarSign, AlertTriangle, Trophy, ArrowRight, Loader2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
@@ -37,7 +39,7 @@ function StatCard({ icon: Icon, label, value, sub, accent, to }) {
   );
 }
 
-function RosterRow({ player }) {
+function RosterRow({ player, showStats = false }) {
   const fragilityColor = {
     Low: '#10b981',
     Medium: '#f59e0b',
@@ -47,35 +49,121 @@ function RosterRow({ player }) {
   return (
     <div className="flex items-center gap-3 py-2 border-b border-zinc-50 last:border-0">
       <div className="w-7 h-7 rounded-full bg-zinc-100 flex items-center justify-center text-xs font-semibold text-zinc-600 flex-shrink-0">
-        {player.number}
+        {player.number || '—'}
       </div>
       <div className="flex-1 min-w-0">
         <p className="text-sm font-medium text-zinc-900 truncate">{player.name}</p>
-        <p className="text-xs text-zinc-400">{player.position}</p>
+        <p className="text-xs text-zinc-400">{player.position || '—'}</p>
       </div>
-      <div className="text-right flex-shrink-0">
-        <p className="text-sm font-semibold text-zinc-900">{player.ppg}</p>
-        <p className="text-xs text-zinc-400">PPG</p>
-      </div>
-      <div
-        className="w-16 text-center text-xs font-medium px-2 py-0.5 rounded-full flex-shrink-0"
-        style={{ color: fragilityColor, backgroundColor: `${fragilityColor}18` }}
-      >
-        {player.fragility}
-      </div>
+      {showStats && (
+        <>
+          <div className="text-right flex-shrink-0">
+            <p className="text-sm font-semibold text-zinc-900">{player.ppg ?? '—'}</p>
+            <p className="text-xs text-zinc-400">PPG</p>
+          </div>
+          <div
+            className="w-16 text-center text-xs font-medium px-2 py-0.5 rounded-full flex-shrink-0"
+            style={{ color: fragilityColor || '#a1a1aa', backgroundColor: `${fragilityColor || '#a1a1aa'}18` }}
+          >
+            {player.fragility || '—'}
+          </div>
+        </>
+      )}
     </div>
   );
 }
 
 export default function Overview() {
   const { selectedTeam } = useTeam();
-  const stats = DUMMY_TEAM_STATS;
-  const topPlayer = [...DUMMY_ROSTER].sort((a, b) => b.ppg - a.ppg)[0];
-  const highRisk = DUMMY_ROSTER.filter(p => p.fragility === 'High').length;
-  const capUsedPct = Math.round((stats.totalSalary / stats.salaryCap) * 100);
+  const [stats, setStats] = useState(null);
+  const [roster, setRoster] = useState([]);
+  const [topPlayer, setTopPlayer] = useState(null);
+  const [highRisk, setHighRisk] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    if (!selectedTeam?.id) {
+      setStats(DUMMY_TEAM_STATS);
+      setRoster(DUMMY_ROSTER);
+      setTopPlayer([...DUMMY_ROSTER].sort((a, b) => b.ppg - a.ppg)[0]);
+      setHighRisk(DUMMY_ROSTER.filter(p => p.fragility === 'High').length);
+      setLoading(false);
+      return;
+    }
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      setError(null);
+      try {
+        const [statsRes, rosterRes] = await Promise.all([
+          api.teams.stats(selectedTeam.id),
+          api.teams.roster(selectedTeam.id),
+        ]);
+        if (cancelled) return;
+        const players = rosterRes.players || [];
+        setRoster(players);
+        setStats({
+          record: statsRes.record,
+          capSpace: statsRes.cap_space ?? 0,
+          totalSalary: statsRes.total_salary ?? 0,
+          salaryCap: statsRes.salary_cap ?? 140588000,
+          offRating: statsRes.off_rating ?? 0,
+          defRating: statsRes.def_rating ?? 0,
+          netRating: statsRes.net_rating ?? 0,
+        });
+        if (players.length > 0) {
+          const playerStats = await Promise.all(
+            players.slice(0, 5).map(p => api.players.get(p.player_id).catch(() => null))
+          );
+          if (cancelled) return;
+          const withPpg = playerStats.filter(Boolean);
+          const top = withPpg.sort((a, b) => (b.ppg ?? 0) - (a.ppg ?? 0))[0];
+          setTopPlayer(top ? { name: top.name, ppg: top.ppg } : null);
+        }
+        const fragilities = await Promise.all(
+          players.slice(0, 10).map(p => api.analytics.fragility(p.player_id).catch(() => null))
+        );
+        if (cancelled) return;
+        setHighRisk(fragilities.filter(f => f?.label === 'High').length);
+      } catch (err) {
+        if (!cancelled) {
+          setError(err.message);
+          setStats(DUMMY_TEAM_STATS);
+          setRoster(DUMMY_ROSTER);
+          setTopPlayer([...DUMMY_ROSTER].sort((a, b) => b.ppg - a.ppg)[0]);
+          setHighRisk(DUMMY_ROSTER.filter(p => p.fragility === 'High').length);
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    load();
+    return () => { cancelled = true; };
+  }, [selectedTeam?.id]);
+
+  const displayStats = stats || DUMMY_TEAM_STATS;
+  const displayRoster = roster.length ? roster : DUMMY_ROSTER;
+  const displayTopPlayer = topPlayer || [...DUMMY_ROSTER].sort((a, b) => b.ppg - a.ppg)[0];
+  const capUsedPct = displayStats.salaryCap
+    ? Math.round(((displayStats.totalSalary ?? 0) / displayStats.salaryCap) * 100)
+    : 0;
+
+  if (loading && !stats) {
+    return (
+      <div className="flex items-center justify-center py-24">
+        <Loader2 className="w-8 h-8 animate-spin text-zinc-400" />
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-6">
+      {error && (
+        <div className="px-4 py-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-sm">
+          Using demo data (API unavailable: {error})
+        </div>
+      )}
       {/* Welcome */}
       <div>
         <h2 className="text-xl font-bold text-zinc-900">
@@ -89,14 +177,14 @@ export default function Overview() {
         <StatCard
           icon={Trophy}
           label="Team Record"
-          value={`${stats.record.wins}–${stats.record.losses}`}
-          sub={`Net Rating +${stats.netRating}`}
+          value={`${displayStats.record?.wins ?? 0}–${displayStats.record?.losses ?? 0}`}
+          sub={`Net Rating ${displayStats.netRating != null ? (displayStats.netRating >= 0 ? '+' : '') + displayStats.netRating : '—'}`}
           accent="#111111"
         />
         <StatCard
           icon={DollarSign}
           label="Cap Space"
-          value={`$${(stats.capSpace / 1e6).toFixed(1)}M`}
+          value={`$${((displayStats.capSpace ?? 0) / 1e6).toFixed(1)}M`}
           sub={`${capUsedPct}% of cap used`}
           accent="#10b981"
           to="/dashboard/contract-valuator"
@@ -104,8 +192,8 @@ export default function Overview() {
         <StatCard
           icon={TrendingUp}
           label="Top Performer"
-          value={topPlayer.ppg}
-          sub={`${topPlayer.name} · PPG`}
+          value={displayTopPlayer.ppg ?? '—'}
+          sub={`${displayTopPlayer.name} · PPG`}
           accent="#3b82f6"
           to="/dashboard/performance-predictor"
         />
@@ -152,10 +240,10 @@ export default function Overview() {
             Salary Cap
           </p>
           <div className="flex flex-col gap-3">
-            <div>
+              <div>
               <div className="flex justify-between text-xs mb-1">
                 <span className="text-zinc-500">Used</span>
-                <span className="font-medium text-zinc-900">${(stats.totalSalary / 1e6).toFixed(1)}M</span>
+                <span className="font-medium text-zinc-900">${((displayStats.totalSalary ?? 0) / 1e6).toFixed(1)}M</span>
               </div>
               <div className="h-2 rounded-full bg-zinc-100 overflow-hidden">
                 <div
@@ -167,19 +255,19 @@ export default function Overview() {
             <div className="grid grid-cols-2 gap-2 mt-2">
               <div className="bg-zinc-50 rounded-xl p-3">
                 <p className="text-xs text-zinc-400">Cap</p>
-                <p className="text-sm font-bold text-zinc-900">${(stats.salaryCap / 1e6).toFixed(1)}M</p>
+                <p className="text-sm font-bold text-zinc-900">${((displayStats.salaryCap ?? 0) / 1e6).toFixed(1)}M</p>
               </div>
               <div className="bg-zinc-50 rounded-xl p-3">
                 <p className="text-xs text-zinc-400">Space</p>
-                <p className="text-sm font-bold text-emerald-600">${(stats.capSpace / 1e6).toFixed(1)}M</p>
+                <p className="text-sm font-bold text-emerald-600">${((displayStats.capSpace ?? 0) / 1e6).toFixed(1)}M</p>
               </div>
               <div className="bg-zinc-50 rounded-xl p-3">
                 <p className="text-xs text-zinc-400">Off Rtg</p>
-                <p className="text-sm font-bold text-zinc-900">{stats.offRating}</p>
+                <p className="text-sm font-bold text-zinc-900">{displayStats.offRating ?? '—'}</p>
               </div>
               <div className="bg-zinc-50 rounded-xl p-3">
                 <p className="text-xs text-zinc-400">Def Rtg</p>
-                <p className="text-sm font-bold text-zinc-900">{stats.defRating}</p>
+                <p className="text-sm font-bold text-zinc-900">{displayStats.defRating ?? '—'}</p>
               </div>
             </div>
           </div>
@@ -190,11 +278,21 @@ export default function Overview() {
       <div className="card p-5">
         <div className="flex items-center justify-between mb-3">
           <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Roster Snapshot</p>
-          <span className="text-xs text-zinc-400">{DUMMY_ROSTER.length} players</span>
+          <span className="text-xs text-zinc-400">{displayRoster.length} players</span>
         </div>
         <div>
-          {DUMMY_ROSTER.slice(0, 8).map(p => (
-            <RosterRow key={p.id} player={p} />
+          {displayRoster.slice(0, 8).map(p => (
+            <RosterRow
+              key={p.player_id ?? p.id}
+              player={{
+                number: p.number,
+                name: p.name,
+                position: p.position,
+                ppg: p.ppg,
+                fragility: p.fragility,
+              }}
+              showStats={!!p.ppg}
+            />
           ))}
         </div>
       </div>

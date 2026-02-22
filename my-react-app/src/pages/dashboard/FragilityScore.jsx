@@ -1,5 +1,8 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useTeam } from '../../context/TeamContext';
+import { api } from '../../api/client';
 import { DUMMY_ROSTER } from '../../data/dummyRoster';
+import { Loader2 } from 'lucide-react';
 import { AlertTriangle, ChevronUp, ChevronDown } from 'lucide-react';
 import {
   RadarChart, Radar, PolarGrid, PolarAngleAxis, ResponsiveContainer, Tooltip,
@@ -39,30 +42,80 @@ function ScoreBar({ value }) {
 }
 
 export default function FragilityScore() {
+  const { selectedTeam } = useTeam();
+  const [roster, setRoster] = useState([]);
+  const [fragilityData, setFragilityData] = useState({});
   const [sortKey, setSortKey] = useState('fragility_score');
   const [sortDir, setSortDir] = useState('desc');
-  const [selected, setSelected] = useState(DUMMY_ROSTER[3].id);
+  const [selected, setSelected] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    if (!selectedTeam?.id) {
+      setRoster(DUMMY_ROSTER);
+      setSelected(DUMMY_ROSTER[3]?.id);
+      setLoading(false);
+      return;
+    }
+    let cancelled = false;
+    api.teams.roster(selectedTeam.id)
+      .then(res => {
+        const players = res.players || [];
+        if (cancelled) return;
+        setRoster(players);
+        setSelected(players[0]?.player_id ?? players[0]?.id);
+        return Promise.all([
+          players,
+          Promise.all(players.map(p => api.analytics.fragility(p.player_id).catch(() => null))),
+        ]);
+      })
+      .then(([players, results]) => {
+        if (cancelled || !players) return;
+        const map = {};
+        players.forEach((p, i) => { map[p.player_id ?? p.id] = results[i]; });
+        setFragilityData(map);
+      })
+      .catch(() => { if (!cancelled) { setError(true); setRoster(DUMMY_ROSTER); setSelected(DUMMY_ROSTER[3]?.id); } })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [selectedTeam?.id]);
 
   function handleSort(key) {
     if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
     else { setSortKey(key); setSortDir('desc'); }
   }
 
-  const sorted = [...DUMMY_ROSTER].sort((a, b) => {
+  const displayRoster = roster.length ? roster : DUMMY_ROSTER;
+  const merged = displayRoster.map(p => {
+    const id = p.player_id ?? p.id;
+    const frag = fragilityData[id] ?? p;
+    return {
+      id,
+      name: p.name,
+      age: p.age ?? frag?.factors?.age ?? 25,
+      mpg: p.mpg ?? frag?.factors?.mpg ?? 25,
+      usage_rate: p.usage_rate ?? frag?.factors?.usage_rate ?? 0.2,
+      back_to_backs: p.back_to_backs ?? frag?.factors?.back_to_backs ?? 0,
+      fragility_score: frag?.score ?? p.fragility_score ?? 0,
+      fragility: frag?.label ?? p.fragility ?? 'Low',
+    };
+  });
+  const sorted = [...merged].sort((a, b) => {
     const va = a[sortKey], vb = b[sortKey];
     const dir = sortDir === 'asc' ? 1 : -1;
     if (typeof va === 'string') return dir * va.localeCompare(vb);
     return dir * (va - vb);
   });
 
-  const player = DUMMY_ROSTER.find(p => p.id === selected);
-  const radarData = [
+  const player = merged.find(p => p.id === selected) ?? merged[0];
+  const radarData = player ? [
     { axis: 'Age',       value: Math.min(100, Math.max(0, (player.age - 20) * 4)) },
     { axis: 'MPG',       value: Math.min(100, (player.mpg / 38) * 100) },
     { axis: 'Usage',     value: Math.min(100, player.usage_rate * 300) },
     { axis: 'B2Bs',      value: Math.min(100, (player.back_to_backs / 18) * 100) },
     { axis: 'Risk',      value: player.fragility_score },
-  ];
+  ] : [];
 
   const SortIcon = ({ k }) => {
     if (sortKey !== k) return null;
@@ -79,8 +132,21 @@ export default function FragilityScore() {
     { key: 'fragility',       label: 'Risk' },
   ];
 
+  if (loading && roster.length === 0) {
+    return (
+      <div className="flex items-center justify-center py-24">
+        <Loader2 className="w-8 h-8 animate-spin text-zinc-400" />
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-6">
+      {error && (
+        <div className="px-4 py-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-sm">
+          Using demo data (API unavailable)
+        </div>
+      )}
       <div>
         <h2 className="text-xl font-bold text-zinc-900 mb-1">Fragility Score</h2>
         <p className="text-sm text-zinc-500">

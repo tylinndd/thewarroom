@@ -1,11 +1,20 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { api } from '../../api/client';
 import { DUMMY_ROSTER } from '../../data/dummyRoster';
 import { NBA_TEAMS } from '../../data/teams';
 import { useTeam } from '../../context/TeamContext';
 import TeamLogo from '../../components/TeamLogo';
 import { ArrowLeftRight, RefreshCw, CheckCircle2, XCircle } from 'lucide-react';
 
-// Generate a fake opposing team roster
+function rosterToTradeFormat(players) {
+  return (players || []).map(p => ({
+    player_id: p.player_id ?? p.id,
+    name: p.name,
+    salary: p.salary ?? 10_000_000,
+  }));
+}
+
+// Generate a fake opposing team roster when API unavailable
 function generateOpponentRoster(teamId) {
   const names = [
     ['Jordan Wells', 'PG'], ['Stefon Cruz', 'SG'], ['Andre Hamilton', 'SF'],
@@ -73,13 +82,45 @@ function SalaryGauge({ mine, theirs }) {
 
 export default function TradeSimulator() {
   const { selectedTeam } = useTeam();
-  const [oppTeamId, setOppTeamId] = useState(NBA_TEAMS[1].id);
+  const [oppTeamId, setOppTeamId] = useState(NBA_TEAMS[1]?.id ?? 1610612738);
+  const [myRoster, setMyRoster] = useState([]);
+  const [oppRoster, setOppRoster] = useState([]);
   const [mySelected, setMySelected] = useState([]);
   const [theirSelected, setTheirSelected] = useState([]);
-  const [tradeStatus, setTradeStatus] = useState(null); // null | 'accepted' | 'rejected'
+  const [tradeStatus, setTradeStatus] = useState(null);
+  const [apiResult, setApiResult] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
 
   const oppTeam = NBA_TEAMS.find(t => t.id === oppTeamId);
-  const [oppRoster] = useState(() => generateOpponentRoster(oppTeamId));
+
+  useEffect(() => {
+    if (!selectedTeam?.id) {
+      setMyRoster(DUMMY_ROSTER);
+      setOppRoster(generateOpponentRoster(oppTeamId));
+      return;
+    }
+    let cancelled = false;
+    Promise.all([
+      api.teams.roster(selectedTeam.id),
+      api.teams.roster(oppTeamId),
+    ])
+      .then(([mine, theirs]) => {
+        if (cancelled) return;
+        const my = (mine.players || []).map(p => ({ ...p, player_id: p.player_id, id: p.player_id, salary: 10_000_000 }));
+        const opp = (theirs.players || []).map(p => ({ ...p, player_id: p.player_id, id: p.player_id, salary: 10_000_000 }));
+        setMyRoster(my.length ? my : DUMMY_ROSTER);
+        setOppRoster(opp.length ? opp : generateOpponentRoster(oppTeamId));
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setError(true);
+          setMyRoster(DUMMY_ROSTER);
+          setOppRoster(generateOpponentRoster(oppTeamId));
+        }
+      });
+    return () => { cancelled = true; };
+  }, [selectedTeam?.id, oppTeamId]);
 
   function toggleMine(player) {
     setMySelected(prev =>
@@ -105,19 +146,50 @@ export default function TradeSimulator() {
     setTradeStatus(null);
   }
 
-  function handleSimulate() {
-    const mySal = mySelected.reduce((s, p) => s + p.salary, 0);
-    const theirSal = theirSelected.reduce((s, p) => s + p.salary, 0);
-    const diff = Math.abs(mySal - theirSal) / Math.max(mySal, theirSal, 1);
-    setTradeStatus(diff <= SALARY_MATCH_THRESHOLD ? 'accepted' : 'rejected');
+  async function handleSimulate() {
+    const teamA = rosterToTradeFormat(mySelected);
+    const teamB = rosterToTradeFormat(theirSelected);
+    if (!selectedTeam?.id || error) {
+      const mySal = mySelected.reduce((s, p) => s + (p.salary ?? 0), 0);
+      const theirSal = theirSelected.reduce((s, p) => s + (p.salary ?? 0), 0);
+      const diff = Math.abs(mySal - theirSal) / Math.max(mySal, theirSal, 1);
+      setTradeStatus(diff <= SALARY_MATCH_THRESHOLD ? 'accepted' : 'rejected');
+      return;
+    }
+    setLoading(true);
+    setApiResult(null);
+    try {
+      const res = await api.trades.simulate({
+        team_a_players: teamA,
+        team_b_players: teamB,
+        team_a_id: selectedTeam.id,
+        team_b_id: oppTeamId,
+      });
+      setApiResult(res);
+      setTradeStatus(res.is_legal ? 'accepted' : 'rejected');
+    } catch (err) {
+      const mySal = mySelected.reduce((s, p) => s + (p.salary ?? 0), 0);
+      const theirSal = theirSelected.reduce((s, p) => s + (p.salary ?? 0), 0);
+      const diff = Math.abs(mySal - theirSal) / Math.max(mySal, theirSal, 1);
+      setTradeStatus(diff <= SALARY_MATCH_THRESHOLD ? 'accepted' : 'rejected');
+    } finally {
+      setLoading(false);
+    }
   }
 
-  const mySalary = mySelected.reduce((s, p) => s + p.salary, 0);
-  const theirSalary = theirSelected.reduce((s, p) => s + p.salary, 0);
+  const mySalary = mySelected.reduce((s, p) => s + (p.salary ?? 0), 0);
+  const theirSalary = theirSelected.reduce((s, p) => s + (p.salary ?? 0), 0);
   const canSimulate = mySelected.length > 0 && theirSelected.length > 0;
+
+  const displayMyRoster = myRoster.length ? myRoster : DUMMY_ROSTER;
 
   return (
     <div className="flex flex-col gap-6">
+      {error && (
+        <div className="px-4 py-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-sm">
+          Using demo rosters (API unavailable)
+        </div>
+      )}
       <div>
         <h2 className="text-xl font-bold text-zinc-900 mb-1">Trade Simulator</h2>
         <p className="text-sm text-zinc-500">
@@ -150,7 +222,7 @@ export default function TradeSimulator() {
             </p>
           </div>
           <div className="flex flex-col gap-1.5">
-            {DUMMY_ROSTER.map(p => (
+            {displayMyRoster.map(p => (
               <PlayerChip key={p.id} player={p} selected={mySelected} onClick={toggleMine} side="mine" />
             ))}
           </div>
@@ -200,24 +272,31 @@ export default function TradeSimulator() {
           </button>
           <button
             onClick={handleSimulate}
-            disabled={!canSimulate}
+            disabled={!canSimulate || loading}
             className="flex items-center gap-1.5 px-5 py-2 rounded-lg bg-zinc-900 text-white text-sm font-medium hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
-            <ArrowLeftRight size={13} />
-            Simulate Trade
+            {loading ? 'Simulating…' : (
+              <>
+                <ArrowLeftRight size={13} />
+                Simulate Trade
+              </>
+            )}
           </button>
         </div>
 
         {tradeStatus === 'accepted' && (
-          <div className="flex items-center gap-2 px-4 py-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 text-sm font-semibold">
-            <CheckCircle2 size={16} />
-            Trade approved! Salary rules satisfied.
+          <div className="flex flex-col gap-1 px-4 py-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 text-sm font-semibold">
+            <span className="flex items-center gap-2"><CheckCircle2 size={16} /> Trade approved! Salary rules satisfied.</span>
+            {apiResult && (
+              <span className="text-xs font-normal text-emerald-600">
+                Team A cap after: ${(apiResult.team_a_cap_after / 1e6).toFixed(1)}M · Team B cap after: ${(apiResult.team_b_cap_after / 1e6).toFixed(1)}M
+              </span>
+            )}
           </div>
         )}
         {tradeStatus === 'rejected' && (
-          <div className="flex items-center gap-2 px-4 py-3 rounded-xl bg-red-50 border border-red-200 text-red-700 text-sm font-semibold">
-            <XCircle size={16} />
-            Trade rejected. Salary mismatch exceeds 25% threshold.
+          <div className="flex flex-col gap-1 px-4 py-3 rounded-xl bg-red-50 border border-red-200 text-red-700 text-sm font-semibold">
+            <span className="flex items-center gap-2"><XCircle size={16} /> {apiResult?.reason || 'Trade rejected. Salary mismatch exceeds CBA rules.'}</span>
           </div>
         )}
       </div>

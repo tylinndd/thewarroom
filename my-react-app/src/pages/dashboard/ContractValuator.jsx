@@ -1,4 +1,8 @@
+import { useState, useEffect } from 'react';
+import { useTeam } from '../../context/TeamContext';
+import { api } from '../../api/client';
 import { DUMMY_ROSTER } from '../../data/dummyRoster';
+import { Loader2 } from 'lucide-react';
 import {
   ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, ReferenceLine, Label,
@@ -38,7 +42,55 @@ const CustomTooltip = ({ active, payload }) => {
 };
 
 export default function ContractValuator() {
-  const data = DUMMY_ROSTER.map(p => ({
+  const { selectedTeam } = useTeam();
+  const [roster, setRoster] = useState([]);
+  const [contractData, setContractData] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    if (!selectedTeam?.id) {
+      setRoster(DUMMY_ROSTER);
+      setContractData(DUMMY_ROSTER.map(p => ({
+        id: p.id, name: p.name, salary: p.salary, win_shares: p.win_shares,
+        fairValue: p.fairValue, position: p.position,
+      })));
+      setLoading(false);
+      return;
+    }
+    let cancelled = false;
+    api.teams.roster(selectedTeam.id)
+      .then(res => {
+        const players = res.players || [];
+        if (cancelled) return;
+        setRoster(players);
+        return Promise.all(players.map(p =>
+          api.analytics.contract(p.player_id).then(c => ({ ...c, id: p.player_id, name: c.name, position: p.position })).catch(() => null)
+        ));
+      })
+      .then(results => {
+        if (cancelled) return;
+        const list = (results || []).filter(Boolean).map(c => ({
+          id: c.player_id, name: c.name, salary: c.current_salary ?? 0, win_shares: c.win_shares ?? 0,
+          fairValue: c.fair_value ?? 0, position: c.position ?? '—',
+        }));
+        setContractData(list);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setError(true);
+          setRoster(DUMMY_ROSTER);
+          setContractData(DUMMY_ROSTER.map(p => ({
+            id: p.id, name: p.name, salary: p.salary, win_shares: p.win_shares,
+            fairValue: p.fairValue, position: p.position,
+          })));
+        }
+      })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [selectedTeam?.id]);
+
+  const data = contractData.length ? contractData : DUMMY_ROSTER.map(p => ({
     id: p.id,
     name: p.name,
     salary: p.salary,
@@ -46,6 +98,14 @@ export default function ContractValuator() {
     fairValue: p.fairValue,
     position: p.position,
   }));
+
+  if (loading && !contractData.length) {
+    return (
+      <div className="flex items-center justify-center py-24">
+        <Loader2 className="w-8 h-8 animate-spin text-zinc-400" />
+      </div>
+    );
+  }
 
   // Reference line: fair value slope
   // We'll draw two reference points manually as a line
@@ -56,6 +116,11 @@ export default function ContractValuator() {
 
   return (
     <div className="flex flex-col gap-6">
+      {error && (
+        <div className="px-4 py-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-sm">
+          Using demo data (API unavailable)
+        </div>
+      )}
       <div>
         <h2 className="text-xl font-bold text-zinc-900 mb-1">Contract Valuator</h2>
         <p className="text-sm text-zinc-500">

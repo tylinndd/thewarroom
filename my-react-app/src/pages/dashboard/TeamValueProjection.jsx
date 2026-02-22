@@ -1,8 +1,11 @@
+import { useState, useEffect } from 'react';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Legend,
 } from 'recharts';
 import { useTeam } from '../../context/TeamContext';
+import { api } from '../../api/client';
+import { Loader2 } from 'lucide-react';
 
 // Monte Carlo 5-year projection dummy data
 const PROJECTION_DATA = [
@@ -39,14 +42,60 @@ function MetricCard({ label, value, sub, color }) {
 
 export default function TeamValueProjection() {
   const { selectedTeam } = useTeam();
+  const [projection, setProjection] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
-  const latestYear = PROJECTION_DATA[PROJECTION_DATA.length - 1];
-  const firstYear = PROJECTION_DATA[0];
+  useEffect(() => {
+    if (!selectedTeam?.id) {
+      setProjection(null);
+      setLoading(false);
+      return;
+    }
+    let cancelled = false;
+    api.teamValue(selectedTeam.id)
+      .then(res => { if (!cancelled) setProjection(res); })
+      .catch(() => { if (!cancelled) { setError(true); setProjection(null); } })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [selectedTeam?.id]);
+
+  const projList = projection?.projections ?? PROJECTION_DATA;
+  const displayData = projList.map((p, i) => {
+    if (typeof p === 'object' && p.year) {
+      return {
+        year: String(p.year),
+        wins: p.wins_mean ?? p.wins,
+        winsLow: p.wins_p10 ?? p.winsLow,
+        winsHigh: p.wins_p90 ?? p.winsHigh,
+        value: (p.valuation_mean ?? p.value) / 1e9,
+        valueLow: (p.valuation_mean ? (p.valuation_mean * 0.85) : p.valueLow) / 1e9,
+        valueHigh: (p.valuation_mean ? (p.valuation_mean * 1.15) : p.valueHigh) / 1e9,
+      };
+    }
+    return PROJECTION_DATA[i] ?? p;
+  });
+
+  const latestYear = displayData[displayData.length - 1] ?? PROJECTION_DATA[PROJECTION_DATA.length - 1];
+  const firstYear = displayData[0] ?? PROJECTION_DATA[0];
   const winGrowth = latestYear.wins - firstYear.wins;
   const valGrowth = ((latestYear.value - firstYear.value) / firstYear.value * 100).toFixed(0);
 
+  if (loading && selectedTeam?.id && !projection) {
+    return (
+      <div className="flex items-center justify-center py-24">
+        <Loader2 className="w-8 h-8 animate-spin text-zinc-400" />
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-6">
+      {error && (
+        <div className="px-4 py-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-sm">
+          Using demo projection (API unavailable)
+        </div>
+      )}
       <div>
         <h2 className="text-xl font-bold text-zinc-900 mb-1">Team Value Projection</h2>
         <p className="text-sm text-zinc-500">
@@ -68,7 +117,7 @@ export default function TeamValueProjection() {
           Win Projection (Monte Carlo bands)
         </p>
         <ResponsiveContainer width="100%" height={220}>
-          <AreaChart data={PROJECTION_DATA} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
+          <AreaChart data={displayData} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
             <defs>
               <linearGradient id="winsHighGrad" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.15} />
@@ -97,7 +146,7 @@ export default function TeamValueProjection() {
           Franchise Valuation ($B) — Monte Carlo Bands
         </p>
         <ResponsiveContainer width="100%" height={220}>
-          <AreaChart data={PROJECTION_DATA} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
+          <AreaChart data={displayData} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
             <defs>
               <linearGradient id="valBandGrad" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="5%" stopColor="#10b981" stopOpacity={0.15} />
@@ -134,8 +183,8 @@ export default function TeamValueProjection() {
               ))}
             </tr>
           </thead>
-          <tbody>
-            {PROJECTION_DATA.map((row, i) => (
+            <tbody>
+            {displayData.map((row, i) => (
               <tr key={row.year} className={`border-b border-zinc-50 last:border-0 ${i === 0 ? 'bg-zinc-50/50' : ''}`}>
                 <td className="px-4 py-3 font-semibold text-zinc-900">{row.year}{i === 0 ? ' (Current)' : ''}</td>
                 <td className="px-4 py-3 text-zinc-700 font-medium">{row.wins}W</td>

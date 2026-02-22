@@ -1,5 +1,8 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useTeam } from '../../context/TeamContext';
+import { api } from '../../api/client';
 import { DUMMY_ROSTER } from '../../data/dummyRoster';
+import { Loader2 } from 'lucide-react';
 
 // Zone definitions: [cx, cy, label, pps range example]
 const COURT_ZONES = [
@@ -74,8 +77,69 @@ function CourtSVG({ zones }) {
 }
 
 export default function ShotHotspots() {
-  const [selectedId, setSelectedId] = useState(DUMMY_ROSTER[0].id);
-  const player = DUMMY_ROSTER.find(p => p.id === selectedId);
+  const { selectedTeam } = useTeam();
+  const [roster, setRoster] = useState([]);
+  const [shotZones, setShotZones] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [selectedId, setSelectedId] = useState(null);
+
+  useEffect(() => {
+    if (!selectedTeam?.id) {
+      setRoster(DUMMY_ROSTER);
+      setSelectedId(DUMMY_ROSTER[0]?.id);
+      setLoading(false);
+      return;
+    }
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await api.teams.roster(selectedTeam.id);
+        const players = res.players || [];
+        setRoster(players);
+        if (players.length > 0 && !selectedId) setSelectedId(players[0].player_id);
+      } catch (err) {
+        if (!cancelled) {
+          setError(err.message);
+          setRoster(DUMMY_ROSTER);
+          setSelectedId(DUMMY_ROSTER[0]?.id);
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    load();
+    return () => { cancelled = true; };
+  }, [selectedTeam?.id]);
+
+  const [playerStats, setPlayerStats] = useState(null);
+
+  useEffect(() => {
+    if (!selectedId || roster.length === 0) return;
+    const pid = typeof selectedId === 'number' ? selectedId : roster.find(p => (p.player_id ?? p.id) === selectedId)?.player_id ?? roster[0]?.player_id;
+    if (!pid) return;
+    let cancelled = false;
+    Promise.all([
+      api.players.shotZones(pid, selectedTeam?.id ?? 0),
+      roster.some(p => (p.player_id ?? p.id) === pid) ? api.players.get(pid) : Promise.resolve(null),
+    ]).then(([zonesRes, stats]) => {
+      if (!cancelled) {
+        setShotZones(zonesRes.zones);
+        setPlayerStats(stats);
+      }
+    }).catch(() => { if (!cancelled) setShotZones(null); setPlayerStats(null); });
+    return () => { cancelled = true; };
+  }, [selectedId, selectedTeam?.id, roster]);
+
+  const displayRoster = roster.length ? roster : DUMMY_ROSTER;
+  const sid = selectedId ?? displayRoster[0]?.player_id ?? displayRoster[0]?.id;
+  const playerFromApi = displayRoster.find(p => (p.player_id ?? p.id) === sid);
+  const playerFromDummy = DUMMY_ROSTER.find(p => p.id === sid);
+  const player = playerFromApi
+    ? { name: playerFromApi.name, fg_pct: playerStats?.fg_pct ?? 0, three_pct: playerStats?.three_pct ?? 0, shot_zones: shotZones ?? {} }
+    : playerFromDummy;
 
   const zones = COURT_ZONES.map(zone => {
     const zoneKey = {
@@ -85,14 +149,27 @@ export default function ShotHotspots() {
       arc3left: 'arc3', arc3top: 'arc3', arc3right: 'arc3',
     }[zone.id];
 
-    const data = player.shot_zones[zoneKey] || { pps: 0, fg: 0 };
+    const data = (player?.shot_zones ?? {})[zoneKey] || { pps: 0, fg: 0 };
     // Add slight jitter per zone for variety
     const jitter = (zone.id.length % 3) * 0.015 - 0.01;
     return { ...zone, pps: Math.max(0, data.pps + jitter), fg: data.fg };
   });
 
+  if (!player) {
+    return (
+      <div className="flex items-center justify-center py-24">
+        <Loader2 className="w-8 h-8 animate-spin text-zinc-400" />
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-6">
+      {error && (
+        <div className="px-4 py-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-sm">
+          Using demo data (API unavailable: {error})
+        </div>
+      )}
       <div>
         <h2 className="text-xl font-bold text-zinc-900 mb-1">Shot Hotspots</h2>
         <p className="text-sm text-zinc-500">Points per shot (PPS) and FG% by court zone. Green = efficient, red = inefficient.</p>
@@ -100,19 +177,21 @@ export default function ShotHotspots() {
 
       {/* Player selector */}
       <div className="flex flex-wrap gap-2">
-        {DUMMY_ROSTER.map(p => (
+        {displayRoster.map(p => {
+          const id = p.player_id ?? p.id;
+          return (
           <button
-            key={p.id}
-            onClick={() => setSelectedId(p.id)}
+            key={id}
+            onClick={() => setSelectedId(id)}
             className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-              selectedId === p.id
+              (sid ?? selectedId) === id
                 ? 'bg-zinc-900 text-white'
                 : 'bg-white border border-zinc-200 text-zinc-600 hover:border-zinc-400'
             }`}
           >
             {p.name}
           </button>
-        ))}
+        );})}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
@@ -155,11 +234,11 @@ export default function ShotHotspots() {
             <div className="grid grid-cols-2 gap-2">
               <div className="bg-zinc-50 rounded-xl p-3">
                 <p className="text-xs text-zinc-400">FG%</p>
-                <p className="text-sm font-bold text-zinc-900">{(player.fg_pct * 100).toFixed(1)}%</p>
+                <p className="text-sm font-bold text-zinc-900">{((player.fg_pct ?? 0) * 100).toFixed(1)}%</p>
               </div>
               <div className="bg-zinc-50 rounded-xl p-3">
                 <p className="text-xs text-zinc-400">3P%</p>
-                <p className="text-sm font-bold text-zinc-900">{(player.three_pct * 100).toFixed(1)}%</p>
+                <p className="text-sm font-bold text-zinc-900">{((player.three_pct ?? 0) * 100).toFixed(1)}%</p>
               </div>
             </div>
           </div>

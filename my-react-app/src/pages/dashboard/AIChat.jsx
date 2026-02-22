@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { useTeam } from '../../context/TeamContext';
+import { api } from '../../api/client';
 import { Send, Bot, User, Sparkles } from 'lucide-react';
 
 function buildDummyResponse(message, team) {
@@ -89,13 +90,24 @@ export default function AIChat() {
     setInput('');
     setTyping(true);
 
-    // Simulate LLM latency
-    await new Promise(r => setTimeout(r, 900 + Math.random() * 600));
+    const history = messages.slice(-6).map(m => ({ role: m.role, content: m.content }));
+    const teamName = selectedTeam ? `${selectedTeam.city} ${selectedTeam.name}` : null;
 
-    const response = buildDummyResponse(userMsg, selectedTeam);
-    setTyping(false);
-    setMessages(prev => [...prev, { id: Date.now() + 1, role: 'assistant', content: response }]);
-    inputRef.current?.focus();
+    try {
+      const res = await api.chat({
+        message: userMsg,
+        team_id: selectedTeam?.id ?? undefined,
+        team_name: teamName ?? undefined,
+        history,
+      });
+      setMessages(prev => [...prev, { id: Date.now() + 1, role: 'assistant', content: res.reply }]);
+    } catch (err) {
+      const response = buildDummyResponse(userMsg, selectedTeam);
+      setMessages(prev => [...prev, { id: Date.now() + 1, role: 'assistant', content: response }]);
+    } finally {
+      setTyping(false);
+      inputRef.current?.focus();
+    }
   }
 
   function handleKeyDown(e) {

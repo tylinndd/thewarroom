@@ -1,42 +1,50 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useTeam } from '../../context/TeamContext';
+import { api } from '../../api/client';
 import { DUMMY_ROSTER, FREE_AGENT_POOL } from '../../data/dummyRoster';
+import { Loader2 } from 'lucide-react';
 import { Check, Search, Users } from 'lucide-react';
 
+// Backend expects: pace, three_point, defense, rebounding, playmaking (0-1 weights)
 const IDENTITIES = [
   {
     id: 'pace',
     label: 'Pace & Space',
     desc: 'High pace, perimeter shooting, open floor',
-    weights: { three_pct: 0.4, usage_rate: 0.15, mpg: 0.1, fg_pct: 0.2, apg: 0.15 },
+    weights: { pace: 1.2, three_point: 1.4, defense: 0.6, rebounding: 0.8, playmaking: 1.0 },
+    clientWeights: { three_pct: 0.4, usage_rate: 0.15, mpg: 0.1, fg_pct: 0.2, apg: 0.15 },
   },
   {
     id: 'defensive',
     label: 'Defensive Wall',
     desc: 'Rim protection, switchability, low turnovers',
-    weights: { rpg: 0.4, mpg: 0.2, fg_pct: 0.25, usage_rate: 0.1, apg: 0.05 },
+    weights: { pace: 0.8, three_point: 0.6, defense: 1.4, rebounding: 1.2, playmaking: 0.6 },
+    clientWeights: { rpg: 0.4, mpg: 0.2, fg_pct: 0.25, usage_rate: 0.1, apg: 0.05 },
   },
   {
     id: 'playmaking',
     label: 'Playmaking Hub',
     desc: 'Ball movement, high assists, read-and-react offense',
-    weights: { apg: 0.45, usage_rate: 0.2, three_pct: 0.15, fg_pct: 0.1, mpg: 0.1 },
+    weights: { pace: 1.0, three_point: 1.0, defense: 0.8, rebounding: 0.6, playmaking: 1.4 },
+    clientWeights: { apg: 0.45, usage_rate: 0.2, three_pct: 0.15, fg_pct: 0.1, mpg: 0.1 },
   },
   {
     id: 'iso',
     label: 'ISO / Star-Led',
     desc: 'High usage, scoring volume, hero ball',
-    weights: { ppg: 0.45, usage_rate: 0.3, fg_pct: 0.15, three_pct: 0.05, mpg: 0.05 },
+    weights: { pace: 0.9, three_point: 0.8, defense: 0.7, rebounding: 0.8, playmaking: 1.2 },
+    clientWeights: { ppg: 0.45, usage_rate: 0.3, fg_pct: 0.15, three_pct: 0.05, mpg: 0.05 },
   },
   {
     id: 'balanced',
     label: 'Balanced Attack',
     desc: 'Even distribution of scoring, rebounding, and assists',
-    weights: { ppg: 0.2, rpg: 0.2, apg: 0.2, fg_pct: 0.2, three_pct: 0.2 },
+    weights: { pace: 1.0, three_point: 1.0, defense: 1.0, rebounding: 1.0, playmaking: 1.0 },
+    clientWeights: { ppg: 0.2, rpg: 0.2, apg: 0.2, fg_pct: 0.2, three_pct: 0.2 },
   },
 ];
 
 function cosineSimilarity(player, weights) {
-  // Build a weighted score [0–100] based on normalized stats
   const maxes = { ppg: 30, rpg: 12, apg: 10, three_pct: 0.5, fg_pct: 0.65, usage_rate: 0.4, mpg: 40 };
   let score = 0;
   let total = 0;
@@ -62,9 +70,27 @@ function SimilarityBar({ value }) {
 }
 
 export default function TeamFitEngine() {
+  const { selectedTeam } = useTeam();
   const [identityId, setIdentityId] = useState('pace');
   const [query, setQuery] = useState('');
+  const [apiMatches, setApiMatches] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
   const identity = IDENTITIES.find(i => i.id === identityId);
+
+  useEffect(() => {
+    if (!selectedTeam?.id) return;
+    setLoading(true);
+    setError(null);
+    api.teamFit.search({
+      team_identity: identity.weights,
+      exclude_team_id: selectedTeam.id,
+      top_n: 15,
+    })
+      .then(res => { setApiMatches(res.matches || []); })
+      .catch(() => { setError(true); setApiMatches([]); })
+      .finally(() => setLoading(false));
+  }, [selectedTeam?.id, identityId, identity.weights]);
 
   const allPlayers = [...DUMMY_ROSTER, ...FREE_AGENT_POOL];
   const filtered = allPlayers.filter(p =>
@@ -72,14 +98,31 @@ export default function TeamFitEngine() {
     p.position.toLowerCase().includes(query.toLowerCase())
   );
 
-  const ranked = filtered
-    .map(p => ({ ...p, similarity: cosineSimilarity(p, identity.weights) }))
-    .sort((a, b) => b.similarity - a.similarity);
+  const useApi = selectedTeam?.id && apiMatches.length > 0 && !error;
+  const rankedList = useApi
+    ? apiMatches.map(m => ({
+        id: m.player_id,
+        player_id: m.player_id,
+        name: m.player_name,
+        position: m.stats?.position ?? '—',
+        ppg: m.stats?.ppg ?? 0,
+        rpg: m.stats?.rpg ?? 0,
+        apg: m.stats?.apg ?? 0,
+        similarity: Math.round((m.similarity ?? 0) * 100),
+        team_id: m.team_id,
+      }))
+    : filtered.map(p => ({ ...p, similarity: cosineSimilarity(p, identity.clientWeights) })).sort((a, b) => b.similarity - a.similarity);
+  const ranked = rankedList;
 
   const myRoster = new Set(DUMMY_ROSTER.map(p => p.id));
 
   return (
     <div className="flex flex-col gap-6">
+      {error && selectedTeam?.id && (
+        <div className="px-4 py-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-sm">
+          Using local similarity (API unavailable)
+        </div>
+      )}
       <div>
         <h2 className="text-xl font-bold text-zinc-900 mb-1">Team Fit Engine</h2>
         <p className="text-sm text-zinc-500">
@@ -108,6 +151,11 @@ export default function TeamFitEngine() {
         </div>
         {identity && (
           <p className="mt-3 text-xs text-zinc-400 italic">{identity.desc}</p>
+        )}
+        {loading && selectedTeam?.id && (
+          <div className="mt-2 flex items-center gap-2 text-xs text-zinc-500">
+            <Loader2 className="w-3 h-3 animate-spin" /> Searching pgvector...
+          </div>
         )}
       </div>
 
