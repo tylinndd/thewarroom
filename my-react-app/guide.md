@@ -10,12 +10,41 @@ A high-performance decision-support system for NBA Front Offices. The app bridge
 - AI: LLM (Gemini/OpenAI) for Natural Language Querying (NLQ) and Gameplan Generation.
 
 ## 3. Feature Specifications & Logic
+- **Team Selection Onboarding**: On first sign-up, the executive selects which NBA team he/she is the head of. This choice is persisted to the user's profile and scopes every downstream feature to that team (see §3.1).
 - Shot Selection Hotspots: Map (x, y) coordinates from nba_api. Calculate Points Per Shot (PPS) and FG% per zone.
 - Performance Predictor: Use a Random Forest model on the last 20 games + opponent Defensive Rating to predict stats for the "Next Game."
 - Fragility Score (Injury Risk): Logic based on Age, MPG, Usage Rate, and Back-to-Back frequency. No biometrics.
 - Contract Valuator: Fair Market Value calculation based on Win Shares relative to the Salary Cap.
 - Team Fit Engine: Use Supabase (pgvector) to store player profiles. GMs select a "Team Identity" (e.g., Pace & Space), and we use Cosine Similarity to find matching players.
 - Team Value Projection: 5-year Monte Carlo simulation of team record and financial valuation.
+
+### 3.1 Team Selection & Team-Scoped Data
+
+#### Onboarding Flow
+1. After the executive creates an account (email/password via Supabase Auth), a **Team Selection** screen is shown before any other page.
+2. The screen displays all 30 NBA teams (logo + city + name) in a searchable grid.
+3. The executive clicks a team to select it, confirms the choice, and the selected `team_id` is saved to their user profile in a `profiles` table (column: `team_id`).
+4. Until a team is selected, the user cannot access the main dashboard (route guard / middleware).
+
+#### Data Scoping
+Once a team is chosen, every feature in the app reflects that team:
+- **Roster & Player Data**: The sidebar "Players" section and all player-centric views (Shot Hotspots, Performance Predictor, Fragility Score, Contract Valuator) default to the executive's team roster. The roster is fetched via `nba_api` using the stored `team_id`.
+- **Team Stats & Value Projection**: The Team Value Projection and any team-level dashboards automatically load data for the selected team.
+- **Team Fit Engine**: The "Team Identity" baseline and similarity searches are anchored to the executive's team composition.
+- **Trade Simulator**: The executive's team is pre-loaded on one side of the trade interface; the other side is any opponent team they choose.
+- **AI Chat / NLQ**: Queries are context-aware — the LLM receives the executive's team context so answers like "How is my roster performing?" refer to the correct team.
+
+#### Changing Teams
+- An option in **Settings** allows the executive to switch teams at any time. Switching immediately re-scopes all data across the app.
+
+#### Database Schema Addition
+- `profiles` table (Supabase):
+  - `id` (UUID, FK → `auth.users.id`)
+  - `display_name` (text)
+  - `team_id` (integer, NBA team ID from `nba_api`)
+  - `team_name` (text, e.g., "Los Angeles Lakers")
+  - `created_at` (timestamptz)
+  - `updated_at` (timestamptz)
 
 ## 4. Supabase + pgvector Implementation
 - Embedding: Convert seasonal stats into vectors.
