@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+nba_api
+scikit-learn
+pandas
+numpy
+supabase
+python-dotenv
+openai
+google-genai
